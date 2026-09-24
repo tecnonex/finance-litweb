@@ -3,14 +3,7 @@
 Two modes:
 - ``/lookup`` — exact-match by email, used to validate a typed address
   before creating a member.
-- ``/directory`` — flat list of all users on the instance, used to power
-  the "pick an existing user" dropdown when adding a member.
-
-The directory endpoint exposes every user's email to any authenticated
-caller. That is acceptable for self-hosted, single-tenant deployments
-(everyone on the instance trusts each other). It will need to be scoped
-to "users in the same organization" once multi-tenancy lands; flag this
-when introducing org boundaries.
+- ``/directory`` — restricted endpoint; only superusers can list all users.
 """
 
 import uuid
@@ -40,23 +33,34 @@ async def lookup_user_by_email(
     session: AsyncSession = Depends(get_async_session),
     _: User = Depends(current_active_user),
 ):
+    """Busca exata por e-mail para vincular membros de forma segura."""
     result = await session.execute(
         select(User).where(func.lower(User.email) == email.lower())
     )
     user = result.scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
     return user
 
 
 @router.get("/directory", response_model=list[UserLookupResult])
 async def list_users_directory(
     session: AsyncSession = Depends(get_async_session),
-    _: User = Depends(current_active_user),
+    current_user: User = Depends(current_active_user),
 ):
-    """List every user on the instance — for the member-picker dropdown.
-
-    Single-tenant assumption: scope to org once multi-tenancy lands.
+    """Listagem global bloqueada para usuários comuns.
+    
+    Apenas administradores/superusuários possuem permissão de acesso.
     """
+    # Verifica se o usuário autenticado é um superusuário/admin
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso ao diretório global restrito a administradores."
+        )
+
     result = await session.execute(select(User).order_by(User.email))
     return list(result.scalars().all())
